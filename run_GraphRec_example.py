@@ -51,12 +51,11 @@ class GraphRec(nn.Module):
             Social Encoder for the user nodes
 
         enc_v_history (UV_Encoder):
-            Encoder for the item nodes (from the User Aggregation step)
+            Encoder for the item nodes (from the User Aggregation step of Item Modeling)
 
         r2e (nn.Embedding):
             Embedding layer for converting discrete item rating to embedding vector
         """
-
         super(GraphRec, self).__init__()
         self.enc_u = enc_u
         self.enc_v_history = enc_v_history
@@ -83,16 +82,17 @@ class GraphRec(nn.Module):
         """
         Parameters
         ----------
-        nodes_u (list): Batch of user node ids
-        nodes_v (list): Batch of item node ids. Must be same length as `nodes_u`.
+        nodes_u (torch.Tensor): Batch of user node ids, dimension of (batch_size,)
+        nodes_v (torch.Tensor): Batch of item node ids. Must be same length as `nodes_u`.
         """
-        embeds_u = self.enc_u(nodes_u)  # (batch_size, embed_dim)
-        embeds_v = self.enc_v_history(nodes_v)  # (batch_size, embed_dim)
+        embeds_u = self.enc_u(nodes_u)  # h_i^S from Eq. (9); (batch_size, embed_dim)
+        embeds_v = self.enc_v_history(nodes_v)  # z_j from Eq. (17); (batch_size, embed_dim)
 
         # User Modeling (obtain h_i for each user node)
         x_u = F.relu(self.bn1(self.w_ur1(embeds_u)))
         x_u = F.dropout(x_u, training=self.training)
         x_u = self.w_ur2(x_u)
+        # QN: this *seems* to be Eq. (14), but why is there no non-linearity applied after w_ur2 ??
 
         # Item Modeling (obtain z_j for each item node)
         x_v = F.relu(self.bn2(self.w_vr1(embeds_v)))
@@ -100,7 +100,7 @@ class GraphRec(nn.Module):
         x_v = self.w_vr2(x_v)
 
         # Rating Prediction
-        x_uv = torch.cat((x_u, x_v), dim=1)  # Eq.(20), (batch_size, embed_dim)
+        x_uv = torch.cat((x_u, x_v), dim=1)  # Eq.(20), (batch_size, 2*embed_dim)
         x = F.relu(self.bn3(self.w_uv1(x_uv)))
         x = F.dropout(x, training=self.training)
 
@@ -114,9 +114,9 @@ class GraphRec(nn.Module):
         """
         Parameters
         ----------
-        nodes_u (list): batch of user node ids (integers)
-        nodes_v (list): batch of item node ids (integers)
-        labels_list: list of item ratings of the uv edge (floats)
+        nodes_u (torch.Tensor): batch of user node ids (integers), dimension of (batch_size,)
+        nodes_v (torch.Tensor): batch of item node ids (integers), dimension of (batch_size,)
+        labels_list (torch.Tensor): list of item ratings of the uv edge (floats), dimension of (batch_size,)
         """
         scores = self.forward(nodes_u, nodes_v)  # (batch_size,)
         return self.criterion(scores, labels_list)
@@ -266,20 +266,24 @@ def main():
     r2e = nn.Embedding(num_ratings, embed_dim).to(device)  # embedding layer for item ratings (from user-item graph)
 
     # user feature (User Modeling)
+    # first, generate item-space user latent factors for all users
     # features: item * rating
     agg_u_history = UV_Aggregator(v2e, r2e, u2e, embed_dim, cuda=device, uv=True)
     enc_u_history = UV_Encoder(
         u2e, embed_dim, history_u_lists, history_ur_lists,
         aggregator=agg_u_history, cuda=device, uv=True,
     )
-    # neighbors
+    # then, aggregate those item-space user latent factors of neighbouring user nodes
+    # to form the social-space user latent factors
     agg_u_social = Social_Aggregator(
-        lambda nodes: enc_u_history(nodes).t(), u2e,
-        embed_dim, cuda=device,
+        features=lambda nodes: enc_u_history(nodes).t(),
+        u2e=u2e, embed_dim=embed_dim, cuda=device,
     )
     enc_u = Social_Encoder(
-        lambda nodes: enc_u_history(nodes).t(), embed_dim,
-        social_adj_lists, agg_u_social,
+        lambda nodes: enc_u_history(nodes).t(),
+        embed_dim=embed_dim,
+        social_adj_lists=social_adj_lists,
+        aggregator=agg_u_social,
         base_model=enc_u_history, cuda=device,
     )
 

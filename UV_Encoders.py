@@ -48,13 +48,14 @@ class UV_Encoder(nn.Module):
         """
         Parameters
         ----------
-        nodes (list):
-            list of node_ids of nodes to generate encoding for
+        nodes (torch.Tensor):
+            list of node_ids of nodes to generate encoding for (i.e., a batch of nodes)
+            Size of (batch_size,)
 
         Returns
         -------
         combined (torch.Tensor):
-            dimension (num_nodes, embed_dim)
+            dimension (batch_size, embed_dim)
         """
         tmp_history_uv = []  # will be a list of lists, each list is the list of neighbours in the user-item graph for `node`
         tmp_history_r = []  # will be a list of lists, each list is the list of item ratings corresponding to the uv edge
@@ -63,7 +64,7 @@ class UV_Encoder(nn.Module):
             tmp_history_r.append(self.history_r_lists[int(node)])
 
         neigh_feats = self.aggregator.forward(nodes, tmp_history_uv, tmp_history_r)  # user-item network
-        # neigh_feats has dimensions (num_nodes, embed_dim)
+        # neigh_feats has dimensions (batch_size, embed_dim)
 
         self_feats = self.features.weight[nodes]
         # self-connection could be considered.

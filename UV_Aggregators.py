@@ -1,9 +1,11 @@
+import random
+
+import numpy as np
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import torch.nn.functional as F
-import numpy as np
-import random
+from torch.autograd import Variable
+
 from Attention import Attention
 
 
@@ -17,13 +19,13 @@ class UV_Aggregator(nn.Module):
         Parameters
         ----------
         v2e (nn.Embedding):
-            Embedding layer for the item node ids
+            Embedding layer for the item node ids, contains a `weight` tensor of size (num_items, embed_dim)
 
         r2e (nn.Embedding):
-            Embedding layer for the rating scores
+            Embedding layer for the rating scores, contains a `weight` tensor of size (num_ratings, embed_dim)
 
         u2e (nn.Embedding):
-            Embedding layer for the user node ids
+            Embedding layer for the user node ids, contains a `weight` tensor of size (num_users, embed_dim)
 
         embed_dim (int):
             The common dimension for all embedding vectors in this layer. For example, value used
@@ -40,6 +42,7 @@ class UV_Aggregator(nn.Module):
         self.device = cuda
         self.embed_dim = embed_dim
 
+        # the Embedding layers
         self.v2e = v2e
         self.r2e = r2e
         self.u2e = u2e
@@ -55,8 +58,9 @@ class UV_Aggregator(nn.Module):
         """
         Parameters
         ----------
-        nodes (list):
-            List of "self" nodes undergoing the neighbour aggregation in the user-item graph.
+        nodes (torch.Tensor):
+            List of "self" nodes undergoing the neighbour aggregation in the user-item graph. Dimensions
+            of (batch_size,)
 
         history_uv (list of list):
             history_uv[i] is a list of neighbours of nodes[i].
@@ -69,9 +73,12 @@ class UV_Aggregator(nn.Module):
 
         Returns
         -------
-        to_feats:
-            Either the item-space user latent factor (h^I_i) of user node u_i, or the item latent factor (z_j)
-            of item node v_j. (???)
+        to_feats (torch.Tensor):
+            If uv=True, then this is the expression in braces in Eq. (4), i.e., the aggregated feature vector
+            from neighbouring item nodes into each user node.
+            If uv=False, then this is the expression in braces in Eq. (17), i.e., the aggregated feature vector
+            from neighbouring user nodes into each item node.
+            Dimensions in both cases are the same, (batch_size, embed_dims)
         """
 
         embed_matrix = torch.empty(
@@ -101,16 +108,14 @@ class UV_Aggregator(nn.Module):
             x = F.relu(self.w_r1(x))
             o_history = F.relu(self.w_r2(x))
 
-            # attention weights \alpha
-            att_w = self.att(
+            att_weights = self.att(
                 node1=o_history,
                 u_rep=uv_rep,
                 num_neighs=num_history_item,
             )
+            # attention weights \alpha; dimensions (num_neighs, 1)
 
-            att_history = torch.mm(o_history.t(), att_w)
-            att_history = att_history.t()
-
+            att_history = torch.mm(o_history.t(), att_weights).t()  # (1, embed_dim)
             embed_matrix[i] = att_history
 
         to_feats = embed_matrix
